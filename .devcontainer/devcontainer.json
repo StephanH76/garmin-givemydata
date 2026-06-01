@@ -1,0 +1,10 @@
+{
+  "image": "mcr.microsoft.com/playwright:v1.44.0-jammy",
+  "forwardPorts": [6080],
+  "features": {
+    "ghcr.io/devcontainers/features/desktop-lite:1": {
+      "webPort": "6080"
+    }
+  },
+  "postCreateCommand": "pip install -r requirements.txt && python -m playwright install chromium"
+}
