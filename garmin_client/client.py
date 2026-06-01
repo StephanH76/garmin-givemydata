@@ -295,8 +295,6 @@ class GarminClient:
 
         if self.headless:
             if sys.platform.startswith("linux") and not _os.environ.get("DISPLAY"):
-                # No display (SSH/server) — spawn Xvfb and run headed against it
-                # for better stealth than Chrome's headless mode.
                 display = self._spawn_xvfb()
                 if display:
                     self._xvfb_prev_display = _os.environ.get("DISPLAY")
@@ -308,14 +306,15 @@ class GarminClient:
                     )
                     use_headless2 = True
             else:
-                # Desktop or macOS/Windows — use Chrome's new headless mode
                 use_headless2 = True
 
         driver_kwargs = dict(
+            browser="chrome",
             uc=True,
             user_data_dir=str(self.profile_dir),
             locale_code="en-US",
         )
+
         if use_headless2:
             driver_kwargs["headless2"] = True
 
@@ -337,6 +336,7 @@ class GarminClient:
         self._lifecycle.install()
 
         log.info("Browser engine: SeleniumBase UC (Chrome)")
+
 
     # ── Browser helpers ──────────────────────────────────────────
 
