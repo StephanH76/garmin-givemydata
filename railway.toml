@@ -1,3 +1,2 @@
 [deploy]
 startCommand = "python3 mcp_wrapper.py"
-BASE_URL = https://web-production-ffb71.up.railway.app
