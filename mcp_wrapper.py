@@ -1,16 +1,43 @@
-import sys, os, secrets, hashlib, base64, json, time
+import sys, os, secrets, hashlib, base64, json, time, threading
 sys.path.insert(0, '.')
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import JSONResponse, RedirectResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
-from garmin_mcp.server import mcp
-import uvicorn
+import uvicorn, httpx
+from pathlib import Path
+
+BASE_URL = os.environ.get("BASE_URL", "https://solid-palm-tree-5g74wjx94vq9hv5x7-8000.app.github.dev")
+CODES = {}
+TOKEN_FILE = Path(os.environ.get("GARMIN_DATA_DIR", ".")) / "oauth_tokens.json"
+
+def load_tokens():
+    try:
+        if TOKEN_FILE.exists():
+            data = json.loads(TOKEN_FILE.read_text())
+            now = time.time()
+            return {k: v for k, v in data.items() if v.get("expires", 0) > now}
+    except Exception:
+        pass
+    return {}
+
+def save_tokens(tokens):
+    try:
+        TOKEN_FILE.write_text(json.dumps(tokens))
+    except Exception:
+        pass
+
+TOKENS = load_tokens()
+
+def start_mcp():
+    from garmin_mcp.server import mcp
+    mcp.settings.host = "127.0.0.1"
+    mcp.settings.port = 8001
+    mcp.run(transport="sse")
+
+threading.Thread(target=start_mcp, daemon=True).start()
+time.sleep(3)
 
 app = FastAPI()
-BASE_URL = os.environ.get("BASE_URL", "https://solid-palm-tree-5g74wjx94vq9hv5x7-8000.app.github.dev")
-TOKENS = {}
-CODES = {}
 
 @app.get("/.well-known/oauth-authorization-server")
 async def oauth_meta():
@@ -47,9 +74,9 @@ async def authorize(request: Request, response_type: str = "", client_id: str = 
     return RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state}")
 
 @app.post("/oauth/token")
-async def token(request: Request, grant_type: str = Form(""), code: str = Form(""),
-                redirect_uri: str = Form(""), code_verifier: str = Form(""),
-                client_id: str = Form("")):
+async def token_ep(request: Request, grant_type: str = Form(""), code: str = Form(""),
+                   redirect_uri: str = Form(""), code_verifier: str = Form(""),
+                   client_id: str = Form("")):
     if code not in CODES:
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
     stored = CODES[code]
@@ -57,47 +84,50 @@ async def token(request: Request, grant_type: str = Form(""), code: str = Form("
         digest = hashlib.sha256(code_verifier.encode()).digest()
         expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
         if expected != stored["challenge"]:
-            return JSONResponse({"error": "invalid_grant", "detail": "PKCE mismatch"}, status_code=400)
+            return JSONResponse({"error": "invalid_grant"}, status_code=400)
     access_token = secrets.token_hex(32)
-    TOKENS[access_token] = {"client_id": client_id, "expires": time.time() + 86400}
+    TOKENS[access_token] = {"client_id": client_id, "expires": time.time() + 86400 * 30}
+    save_tokens(TOKENS)
     del CODES[code]
-    return JSONResponse({"access_token": access_token, "token_type": "bearer", "expires_in": 86400})
+    return JSONResponse({"access_token": access_token, "token_type": "bearer", "expires_in": 86400 * 30})
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "tokens": len(TOKENS)}
 
-# Bearer middleware — laat SSE toe zonder token check (SSE doet eigen auth)
-class BearerAuthMiddleware(BaseHTTPMiddleware):
-    PUBLIC = {"/health", "/.well-known/oauth-authorization-server",
-              "/.well-known/oauth-protected-resource",
-              "/oauth/register", "/oauth/authorize", "/oauth/token"}
+def check_token(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return False
+    record = TOKENS.get(auth[7:].strip())
+    return record and record["expires"] > time.time()
 
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        # Alles onder /oauth/ en well-known is publiek
-        if path in self.PUBLIC or path.startswith("/oauth/"):
-            return await call_next(request)
-        # SSE endpoint: check Bearer token
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            token_val = auth[7:].strip()
-            record = TOKENS.get(token_val)
-            if record and record["expires"] > time.time():
-                return await call_next(request)
-        # Geen of ongeldig token
-        return Response(
-            content=json.dumps({"error": "unauthorized"}),
-            status_code=401,
-            media_type="application/json",
-        )
+@app.get("/sse")
+async def sse_proxy(request: Request):
+    if not check_token(request):
+        return Response(json.dumps({"error": "unauthorized"}), status_code=401, media_type="application/json")
+    from starlette.responses import StreamingResponse
+    async def stream():
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("GET", "http://127.0.0.1:8001/sse") as r:
+                async for chunk in r.aiter_bytes():
+                    yield chunk
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
-app.add_middleware(BearerAuthMiddleware)
-
-# SSE op root — Claude verwacht /sse direct
-sse_app = mcp.sse_app()
-app.mount("/", sse_app)
+@app.post("/messages/")
+@app.post("/messages")
+async def messages_proxy(request: Request):
+    if not check_token(request):
+        return Response(json.dumps({"error": "unauthorized"}), status_code=401, media_type="application/json")
+    body = await request.body()
+    params = request.url.query
+    url = f"http://127.0.0.1:8001/messages/" + (f"?{params}" if params else "")
+    async with httpx.AsyncClient() as client:
+        r = await client.post(url, content=body,
+                              headers={k: v for k, v in request.headers.items()
+                                       if k.lower() not in ["host", "authorization"]})
+    return Response(r.content, status_code=r.status_code,
+                    media_type=r.headers.get("content-type", "application/json"))
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
