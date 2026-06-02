@@ -1,6 +1,16 @@
 {
   "image": "mcr.microsoft.com/playwright:v1.44.0-jammy",
-  "forwardPorts": [6080],
+  "forwardPorts": [6080, 8000],
+  "portsAttributes": {
+    "6080": {
+      "visibility": "private"
+    },
+    "8000": {
+      "visibility": "public",
+      "label": "Garmin MCP",
+      "onAutoForward": "silent"
+    }
+  },
   "features": {
     "ghcr.io/devcontainers/features/desktop-lite:1": {
       "webPort": "6080"
