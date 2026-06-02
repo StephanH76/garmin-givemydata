@@ -15,8 +15,6 @@ async def oauth_metadata():
 async def health():
     return {"status": "ok"}
 
-# Mount the SSE MCP server
-from starlette.routing import Mount
 sse_app = mcp.sse_app()
 app.mount("/", sse_app)
 
