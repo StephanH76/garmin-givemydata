@@ -1,0 +1,95 @@
+name: Weekly Garmin sync
+
+# Runs `python3 garmin_givemydata.py` once a week (incremental smart sync).
+# The SQLite database and login session are carried over between runs as an
+# encrypted artifact, because this repository is public and plain artifacts
+# would be downloadable by anyone.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   GARMIN_EMAIL               Garmin Connect login
+#   GARMIN_PASSWORD            Garmin Connect password
+#   GARMIN_ARCHIVE_PASSPHRASE  Long random passphrase used to encrypt the artifact
+#
+# Decrypt a downloaded artifact locally / in a Codespace with:
+#   gpg --batch --pinentry-mode loopback --passphrase "$GARMIN_ARCHIVE_PASSPHRASE" \
+#       -d garmin-data.tar.gz.gpg | tar xz
+
+on:
+  schedule:
+    # Every Monday at 05:17 UTC
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: weekly-garmin-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GARMIN_DATA_DIR: ${{ github.workspace }}/data
+      GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+      GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+      PASSPHRASE: ${{ secrets.GARMIN_ARCHIVE_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check secrets
+        run: |
+          for v in GARMIN_EMAIL GARMIN_PASSWORD PASSPHRASE; do
+            if [ -z "${!v}" ]; then echo "::error::Secret for $v is not set"; exit 1; fi
+          done
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          pip install -r requirements.txt
+
+      - name: Restore previous database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$GARMIN_DATA_DIR"
+          run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow weekly-sync.yml \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$run_id" ] && gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+               --name garmin-data --dir restore; then
+            gpg --batch --pinentry-mode loopback --passphrase "$PASSPHRASE" \
+              -d restore/garmin-data.tar.gz.gpg | tar xz -C "$GARMIN_DATA_DIR"
+            echo "Restored data from run $run_id"
+          else
+            echo "No previous data found - this run does a full historical fetch."
+          fi
+
+      - name: Run garmin_givemydata.py
+        run: python3 garmin_givemydata.py
+
+      - name: Show status
+        if: always()
+        run: python3 garmin_givemydata.py --status || true
+
+      - name: Encrypt data
+        run: |
+          cd "$GARMIN_DATA_DIR"
+          files=$(ls -d garmin.db garmin_session.json 2>/dev/null || true)
+          if [ -z "$files" ]; then echo "::error::No garmin.db produced"; exit 1; fi
+          tar czf - $files | gpg --batch --pinentry-mode loopback --passphrase "$PASSPHRASE" \
+            --symmetric --cipher-algo AES256 -o "$GITHUB_WORKSPACE/garmin-data.tar.gz.gpg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: garmin-data
+          path: garmin-data.tar.gz.gpg
+          retention-days: 90
+          if-no-files-found: error
