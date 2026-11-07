@@ -9,6 +9,9 @@ name: Weekly Garmin sync
 #   GARMIN_EMAIL               Garmin Connect login
 #   GARMIN_PASSWORD            Garmin Connect password
 #   GARMIN_ARCHIVE_PASSPHRASE  Long random passphrase used to encrypt the artifact
+# Optional:
+#   GARMIN_SESSION_JSON        Contents of garmin_session.json from a Codespace
+#                              login; used when no previous session exists
 #
 # Decrypt a downloaded artifact locally / in a Codespace with:
 #   gpg --batch --pinentry-mode loopback --passphrase "$GARMIN_ARCHIVE_PASSPHRASE" \
@@ -59,6 +62,7 @@ jobs:
       - name: Restore previous database
         env:
           GH_TOKEN: ${{ github.token }}
+          SEED_SESSION: ${{ secrets.GARMIN_SESSION_JSON }}
         run: |
           mkdir -p "$GARMIN_DATA_DIR"
           run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow weekly-sync.yml \
@@ -70,6 +74,13 @@ jobs:
             echo "Restored data from run $run_id"
           else
             echo "No previous data found - this run does a full historical fetch."
+          fi
+          # Seed the login session from a Codespace login (avoids the SSO form,
+          # which Garmin tends to block from GitHub's datacenter IPs).
+          if [ ! -s "$GARMIN_DATA_DIR/garmin_session.json" ] && [ -n "$SEED_SESSION" ]; then
+            printf '%s' "$SEED_SESSION" > "$GARMIN_DATA_DIR/garmin_session.json"
+            chmod 600 "$GARMIN_DATA_DIR/garmin_session.json"
+            echo "Seeded login session from GARMIN_SESSION_JSON secret"
           fi
 
       - name: Run garmin_givemydata.py
