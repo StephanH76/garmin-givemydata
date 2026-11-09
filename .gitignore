@@ -21,6 +21,8 @@ dist/
 *.db-shm
 *.db-wal
 garmin_session.json
+oauth_tokens.json
+weekly_sync.log
 .mcp.json
 .codex
 .codex/
