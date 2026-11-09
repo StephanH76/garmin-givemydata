@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Called by the Codespace on every start (postStartCommand in devcontainer.json).
+# Run automatically when the Codespace editor opens (.vscode/tasks.json, runOn folderOpen),
+# also when opened from Safari on a phone. Can also be run by hand.
 # Stops a leftover server and starts start_server.sh in the background, so the
 # Garmin connector works as soon as the Codespace is running. Log: server.log
 cd "$(dirname "$0")" || exit 1
