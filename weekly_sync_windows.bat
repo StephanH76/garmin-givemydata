@@ -6,6 +6,9 @@ REM Set CODESPACE_NAME below (shown by: gh codespace list). Leave empty to skip 
 set CODESPACE_NAME=didactic-couscous-5g74wjx94v46h747q
 
 cd /d "%~dp0"
+REM Use the portable gh (no admin install) if present, else gh from PATH
+set GH=gh
+if exist "%LOCALAPPDATA%\gh\bin\gh.exe" set GH="%LOCALAPPDATA%\gh\bin\gh.exe"
 echo ===== %date% %time% ===== >> weekly_sync.log
 venv\Scripts\python.exe garmin_givemydata.py >> weekly_sync.log 2>&1
 if errorlevel 1 (
@@ -13,7 +16,7 @@ if errorlevel 1 (
     exit /b 1
 )
 if "%CODESPACE_NAME%"=="" exit /b 0
-gh codespace cp -c %CODESPACE_NAME% garmin.db remote:/workspaces/garmin-givemydata/garmin.db >> weekly_sync.log 2>&1
+%GH% codespace cp -c %CODESPACE_NAME% garmin.db remote:/workspaces/garmin-givemydata/garmin.db >> weekly_sync.log 2>&1
 if errorlevel 1 (
     echo Copy to Codespace failed. >> weekly_sync.log
     exit /b 1
