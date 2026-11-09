@@ -31,6 +31,12 @@ make_port_public() {
   echo "Set it to Public by hand (Ports tab)."
 }
 
+# Watcher that switches port 8000 back to public whenever it turns private
+if ! pgrep -f "keep_port_public.sh" >/dev/null; then
+  setsid nohup ./keep_port_public.sh > /dev/null 2>&1 < /dev/null &
+  echo "Port watcher started."
+fi
+
 if server_up; then
   echo "Garmin MCP server is already running."
   make_port_public
