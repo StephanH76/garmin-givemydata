@@ -7,4 +7,15 @@ cd "$(dirname "$0")" || exit 1
 pkill -f "python3 mcp_wrapper.py" 2>/dev/null
 sleep 1
 setsid nohup ./start_server.sh > server.log 2>&1 < /dev/null &
-echo "Garmin MCP server starting in the background (log: server.log)"
+echo "Garmin MCP server starting in the background (log: server.log)..."
+# Wait until the server answers. If this script exited right away, the editor
+# would clean up the new server together with this script before it detached.
+for _ in $(seq 1 90); do
+  if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)" 2>/dev/null; then
+    echo "Garmin MCP server is running."
+    exit 0
+  fi
+  sleep 2
+done
+echo "Server did not answer within 3 minutes - see server.log"
+exit 1
