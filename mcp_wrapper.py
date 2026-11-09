@@ -18,6 +18,7 @@ from starlette.responses import Response
 
 BASE_URL = os.environ.get("BASE_URL", "https://solid-palm-tree-5g74wjx94vq9hv5x7-8000.app.github.dev")
 CODES = {}
+TOKEN_LIFETIME = 86400 * 365  # connector stays connected for one year
 TOKEN_FILE = Path(os.environ.get("GARMIN_DATA_DIR", ".")) / "oauth_tokens.json"
 ENV_FILE = Path(os.environ.get("GARMIN_DATA_DIR", ".")) / ".env"
 
@@ -194,10 +195,10 @@ async def token_ep(
         if expected != stored["challenge"]:
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
     access_token = secrets.token_hex(32)
-    TOKENS[access_token] = {"client_id": client_id, "expires": time.time() + 86400 * 30}
+    TOKENS[access_token] = {"client_id": client_id, "expires": time.time() + TOKEN_LIFETIME}
     save_tokens(TOKENS)
     del CODES[code]
-    return JSONResponse({"access_token": access_token, "token_type": "bearer", "expires_in": 86400 * 30})
+    return JSONResponse({"access_token": access_token, "token_type": "bearer", "expires_in": TOKEN_LIFETIME})
 
 
 @app.get("/health")
