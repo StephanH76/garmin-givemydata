@@ -28,5 +28,6 @@
         "task.allowAutomaticTasks": "on"
       }
     }
-  }
+  },
+  "postStartCommand": "./autostart_server.sh"
 }
