@@ -24,6 +24,7 @@ garmin_session.json
 oauth_tokens.json
 weekly_sync.log
 server.log
+autostart.log
 .mcp.json
 .codex
 .codex/
