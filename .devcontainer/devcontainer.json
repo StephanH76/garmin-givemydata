@@ -18,7 +18,8 @@
     "ghcr.io/devcontainers/features/desktop-lite:1": {
       "webPort": "6080"
     },
-    "ghcr.io/devcontainers/features/sshd:1": {}
+    "ghcr.io/devcontainers/features/sshd:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
   },
   "postCreateCommand": "(python3 -m pip --version || python3 get-pip.py) && python3 -m pip install -r requirements.txt",
   "customizations": {
