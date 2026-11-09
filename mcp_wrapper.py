@@ -73,14 +73,26 @@ def start_mcp():
     mcp.run(transport="sse", host="127.0.0.1", port=8001)
 
 
+def start_mcp_http():
+    # Streamable HTTP (the transport Claude now prefers); served on /mcp
+    from garmin_mcp.server import mcp
+
+    mcp.run(transport="streamable-http", host="127.0.0.1", port=8002)
+
+
 threading.Thread(target=start_mcp, daemon=True).start()
+threading.Thread(target=start_mcp_http, daemon=True).start()
 time.sleep(3)
 
 app = FastAPI()
 
 
+# Also answer the path-suffixed discovery URLs (RFC 8414 / RFC 9728), e.g.
+# /.well-known/oauth-protected-resource/mcp, which newer clients try first.
 @app.get("/.well-known/oauth-authorization-server")
-async def oauth_meta():
+@app.get("/.well-known/oauth-authorization-server/{rest:path}")
+@app.get("/.well-known/openid-configuration")
+async def oauth_meta(rest: str = ""):
     return JSONResponse(
         {
             "issuer": BASE_URL,
@@ -95,8 +107,20 @@ async def oauth_meta():
 
 
 @app.get("/.well-known/oauth-protected-resource")
-async def oauth_resource():
-    return JSONResponse({"resource": BASE_URL, "authorization_servers": [BASE_URL]})
+@app.get("/.well-known/oauth-protected-resource/{rest:path}")
+async def oauth_resource(rest: str = ""):
+    resource = f"{BASE_URL}/{rest}" if rest else BASE_URL
+    return JSONResponse({"resource": resource, "authorization_servers": [BASE_URL]})
+
+
+def unauthorized():
+    # Tells the client where to find the OAuth metadata (MCP authorization spec)
+    return Response(
+        json.dumps({"error": "unauthorized"}),
+        status_code=401,
+        media_type="application/json",
+        headers={"WWW-Authenticate": f'Bearer resource_metadata="{BASE_URL}/.well-known/oauth-protected-resource"'},
+    )
 
 
 @app.post("/oauth/register")
@@ -217,7 +241,7 @@ def check_token(request: Request):
 @app.get("/sse")
 async def sse_proxy(request: Request):
     if not check_token(request):
-        return Response(json.dumps({"error": "unauthorized"}), status_code=401, media_type="application/json")
+        return unauthorized()
     from starlette.responses import StreamingResponse
 
     async def stream():
@@ -233,7 +257,7 @@ async def sse_proxy(request: Request):
 @app.post("/messages")
 async def messages_proxy(request: Request):
     if not check_token(request):
-        return Response(json.dumps({"error": "unauthorized"}), status_code=401, media_type="application/json")
+        return unauthorized()
     body = await request.body()
     params = request.url.query
     url = "http://127.0.0.1:8001/messages/" + (f"?{params}" if params else "")
@@ -244,6 +268,35 @@ async def messages_proxy(request: Request):
             headers={k: v for k, v in request.headers.items() if k.lower() not in ["host", "authorization"]},
         )
     return Response(r.content, status_code=r.status_code, media_type=r.headers.get("content-type", "application/json"))
+
+
+_HOP_HEADERS = {"host", "authorization", "content-length", "connection", "transfer-encoding", "accept-encoding"}
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"])
+@app.api_route("/mcp/", methods=["GET", "POST", "DELETE"])
+async def mcp_http_proxy(request: Request):
+    """Streamable HTTP endpoint: proxies to the MCP server on port 8002."""
+    if not check_token(request):
+        return unauthorized()
+    from starlette.background import BackgroundTask
+    from starlette.responses import StreamingResponse
+
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_HEADERS}
+    client = httpx.AsyncClient(timeout=None)
+    upstream = client.build_request(
+        request.method, "http://127.0.0.1:8002/mcp", headers=headers, content=await request.body()
+    )
+    r = await client.send(upstream, stream=True)
+    out_headers = {k: v for k, v in r.headers.items() if k.lower() not in _HOP_HEADERS | {"content-encoding"}}
+
+    async def close():
+        await r.aclose()
+        await client.aclose()
+
+    return StreamingResponse(
+        r.aiter_raw(), status_code=r.status_code, headers=out_headers, background=BackgroundTask(close)
+    )
 
 
 if __name__ == "__main__":
