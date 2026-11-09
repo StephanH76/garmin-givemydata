@@ -1,0 +1,14 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start Garmin MCP server",
+      "detail": "Fetches the newest garmin.db and starts the connector server in the background (log: server.log)",
+      "type": "shell",
+      "command": "./autostart_server.sh",
+      "runOptions": { "runOn": "folderOpen" },
+      "presentation": { "reveal": "silent", "panel": "dedicated" },
+      "problemMatcher": []
+    }
+  ]
+}
