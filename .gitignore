@@ -23,6 +23,7 @@ dist/
 garmin_session.json
 oauth_tokens.json
 weekly_sync.log
+server.log
 .mcp.json
 .codex
 .codex/
