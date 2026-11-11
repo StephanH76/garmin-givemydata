@@ -1,2 +1,8 @@
 [deploy]
+# Downloads the newest garmin.db from the private draft release at start and
+# every DB_REFRESH_HOURS (needs the GITHUB_TOKEN variable), then serves the
+# Garmin MCP server with OAuth for the Claude connector on /mcp and /sse.
 startCommand = "python3 mcp_wrapper.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ALWAYS"

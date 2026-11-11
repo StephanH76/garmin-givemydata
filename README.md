@@ -592,3 +592,20 @@ This tool is **unofficial** and **not affiliated with Garmin**. It accesses Garm
 ## License
 
 [AGPL-3.0](LICENSE) — Free to use, modify, and distribute. If you build a service using this code, you must keep it open source.
+
+## Always-on connector op Railway (aanbevolen)
+
+Een Codespace stopt na maximaal 4 uur zonder activiteit, en dan valt de Claude-connector weg. Railway houdt de server altijd aan, met een vaste URL.
+
+1. railway.com → inloggen met GitHub → **New Project → Deploy from GitHub repo** → `garmin-givemydata`.
+2. **Variables**:
+   - `MCP_PASSWORD`: zelfgekozen wachtwoord voor de inlogpagina van de connector.
+   - `GITHUB_TOKEN`: fine-grained token, alleen voor deze repo, met *Contents: Read and write* (nodig om de privé draft release `garmin-db` te lezen).
+   - optioneel `DB_REFRESH_HOURS` (standaard 6).
+3. **Settings → Networking → Generate Domain**.
+4. Controleer `https://<domein>/health`: `db_present: true`.
+5. claude.ai (browser of desktop-app, **niet** de iPhone-app) → Instellingen → Connectors → oude Garmin-connector verwijderen → **Add custom connector**: naam `Garmin`, URL `https://<domein>/mcp` → Connect → wachtwoord.
+
+De server downloadt bij de start en elke 6 uur de nieuwste `garmin.db` uit de draft release (geüpload door `weekly_sync_windows.bat`). Toegangstokens zijn ondertekend met een sleutel die van `MCP_PASSWORD` is afgeleid (of van `TOKEN_SECRET`), dus ze blijven geldig na een herstart of redeploy. Wijzig je het wachtwoord, dan moet je de connector opnieuw verbinden.
+
+Test lokaal: `GARMIN_DATA_DIR=<map met garmin.db> python3 tools/test_connector_e2e.py`

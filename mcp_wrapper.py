@@ -16,7 +16,22 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.responses import Response
 
-BASE_URL = os.environ.get("BASE_URL", "https://solid-palm-tree-5g74wjx94vq9hv5x7-8000.app.github.dev")
+import hmac
+
+
+def detect_base_url() -> str:
+    """Public URL of this server: BASE_URL, else Railway's or the Codespace's own domain."""
+    if os.environ.get("BASE_URL"):
+        return os.environ["BASE_URL"].rstrip("/")
+    if os.environ.get("RAILWAY_PUBLIC_DOMAIN"):
+        return "https://" + os.environ["RAILWAY_PUBLIC_DOMAIN"]
+    if os.environ.get("CODESPACE_NAME"):
+        domain = os.environ.get("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN", "app.github.dev")
+        return f"https://{os.environ['CODESPACE_NAME']}-8000.{domain}"
+    return f"http://localhost:{os.environ.get('PORT', 8000)}"
+
+
+BASE_URL = detect_base_url()
 CODES = {}
 TOKEN_LIFETIME = 86400 * 365  # connector stays connected for one year
 TOKEN_FILE = Path(os.environ.get("GARMIN_DATA_DIR", ".")) / "oauth_tokens.json"
@@ -65,6 +80,69 @@ def save_tokens(tokens):
 
 
 TOKENS = load_tokens()
+
+# Signed (stateless) access tokens: they stay valid after a restart or redeploy,
+# also on hosts without a persistent disk. The key comes from TOKEN_SECRET, or is
+# derived from MCP_PASSWORD - changing the password therefore logs Claude out.
+_SECRET = (os.environ.get("TOKEN_SECRET") or ("garmin-mcp:" + MCP_PASSWORD if MCP_PASSWORD else "")).encode()
+
+
+def _sign(payload: str) -> str:
+    return hmac.new(_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+
+
+def make_token(client_id: str) -> str:
+    expires = int(time.time() + TOKEN_LIFETIME)
+    nonce = secrets.token_hex(8)
+    body = base64.urlsafe_b64encode(json.dumps({"c": client_id[:64], "e": expires, "n": nonce}).encode()).decode().rstrip("=")
+    return f"gm1.{body}.{_sign(body)}"
+
+
+def token_valid(token: str) -> bool:
+    if token.startswith("gm1.") and _SECRET:
+        try:
+            _, body, sig = token.split(".", 2)
+            if not hmac.compare_digest(sig, _sign(body)):
+                return False
+            data = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+            return data.get("e", 0) > time.time()
+        except Exception:
+            return False
+    record = TOKENS.get(token)  # tokens from older versions (oauth_tokens.json)
+    return bool(record and record["expires"] > time.time())
+
+
+# Keep garmin.db current: download the newest upload from the private draft
+# release at start and every DB_REFRESH_HOURS (needs GITHUB_TOKEN).
+DB_REFRESH_HOURS = float(os.environ.get("DB_REFRESH_HOURS", "6"))
+DB_STATUS = {"last_check": None, "result": None}
+
+
+def refresh_db():
+    if not (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")):
+        DB_STATUS["result"] = "no GITHUB_TOKEN - garmin.db is not refreshed"
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "tools"))
+        import fetch_garmin_db
+
+        code = fetch_garmin_db.main()
+        DB_STATUS["result"] = "ok" if code == 0 else f"fetch returned {code}"
+    except Exception as e:  # never let a failed download stop the server
+        DB_STATUS["result"] = f"error: {e}"
+    DB_STATUS["last_check"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"garmin.db refresh: {DB_STATUS['result']}", flush=True)
+
+
+def _refresh_loop():
+    while True:
+        time.sleep(DB_REFRESH_HOURS * 3600)
+        refresh_db()
+
+
+if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
+    refresh_db()
+    threading.Thread(target=_refresh_loop, daemon=True).start()
 
 
 def start_mcp():
@@ -218,24 +296,28 @@ async def token_ep(
         expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
         if expected != stored["challenge"]:
             return JSONResponse({"error": "invalid_grant"}, status_code=400)
-    access_token = secrets.token_hex(32)
-    TOKENS[access_token] = {"client_id": client_id, "expires": time.time() + TOKEN_LIFETIME}
-    save_tokens(TOKENS)
+    access_token = make_token(client_id)
     del CODES[code]
     return JSONResponse({"access_token": access_token, "token_type": "bearer", "expires_in": TOKEN_LIFETIME})
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "tokens": len(TOKENS)}
+    db = Path(os.environ.get("GARMIN_DATA_DIR", ".")) / "garmin.db"
+    return {
+        "status": "ok",
+        "base_url": BASE_URL,
+        "db_present": db.exists(),
+        "db_modified": time.strftime("%Y-%m-%d %H:%M", time.gmtime(db.stat().st_mtime)) + " UTC" if db.exists() else None,
+        "db_refresh": DB_STATUS,
+    }
 
 
 def check_token(request: Request):
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return False
-    record = TOKENS.get(auth[7:].strip())
-    return record and record["expires"] > time.time()
+    return token_valid(auth[7:].strip())
 
 
 @app.get("/sse")
