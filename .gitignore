@@ -34,3 +34,7 @@ downloaded_files/
 # graphify (safe, code-only) — local tool and output
 .graphify-venv/
 graphify-out/
+app_data/
+nas/config.php
+nas/login_attempts.json
+nas/github_token
