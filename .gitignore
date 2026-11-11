@@ -34,3 +34,4 @@ downloaded_files/
 # graphify (safe, code-only) — local tool and output
 .graphify-venv/
 graphify-out/
+app_data/
