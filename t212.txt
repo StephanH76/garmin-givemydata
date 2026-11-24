@@ -1,17 +1,34 @@
 #!/bin/sh
-# Trading 212 - haalt portefeuille op en slaat het op naast dit bestand.
-# Vul hieronder ALLEEN je key en secret in (tussen de aanhalingstekens).
+# Trading 212 - haalt je portefeuille op en maakt een dagregel.
+# Vul hieronder ALLEEN je key en secret in, tussen de enkele aanhalingstekens.
 
-KEY="PLAK_HIER_JE_API_KEY"
-SECRET="PLAK_HIER_JE_API_SECRET"
+KEY='PLAK_HIER_JE_API_KEY'
+SECRET='PLAK_HIER_JE_API_SECRET'
 
 # Resultaten komen in de map "output" naast dit bestand.
 OUT="$(dirname "$0")/output"
 BASE="https://live.trading212.com/api/v0/equity"
 mkdir -p "$OUT"
 
-curl -s -u "$KEY:$SECRET" "$BASE/account/summary"         > "$OUT/summary.json"
+# Pauzes tussen de aanroepen: Trading 212 geeft anders "too many requests".
 curl -s -u "$KEY:$SECRET" "$BASE/positions"               > "$OUT/positions.json"
+sleep 12
+curl -s -u "$KEY:$SECRET" "$BASE/account/summary"         > "$OUT/summary.json"
+sleep 12
 curl -s -u "$KEY:$SECRET" "$BASE/history/orders?limit=50" > "$OUT/orders.json"
+
+# Dagregel: totale inleg en waarde (euro) van alle posities.
+# Alleen schrijven als de respons echt posities bevat.
+if grep -q '"totalCost"' "$OUT/positions.json"; then
+  DATUM=$(date +%Y-%m-%d)
+  INLEG=$(grep -o '"totalCost":[0-9.]*' "$OUT/positions.json" | cut -d: -f2 | awk '{s+=$1} END {printf "%.2f", s}')
+  WAARDE=$(grep -o '"currentValue":[0-9.]*' "$OUT/positions.json" | cut -d: -f2 | awk '{s+=$1} END {printf "%.2f", s}')
+  DAG="$OUT/trading212_dag.csv"
+  [ -f "$DAG" ] || echo "datum,inleg_eur,waarde_eur" > "$DAG"
+  # Staat vandaag er al in, dan vervangen we die regel.
+  grep -v "^$DATUM," "$DAG" > "$DAG.tmp"
+  echo "$DATUM,$INLEG,$WAARDE" >> "$DAG.tmp"
+  mv "$DAG.tmp" "$DAG"
+fi
 
 date > "$OUT/laatste_run.txt"
